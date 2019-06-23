@@ -1,0 +1,271 @@
+---
+title: "Assignment -1: Group-F"
+Team  : Eric C, Michael M, Shijo J
+output: html_document
+---
+
+**Anime Recommender System**
+By Eric C, Shijo J and Michael M
+
+*Abstract*
+The goal of this project is to build an anime recommendation system. Success of the assignment is measured by accuracy of recommendations anime shows that best fit a user based on their prior ratings of anime. This model can be used by streaming services (e.g. Netflix, Amazon, etc.) to direct the most relevant programming for their viewers.
+
+*Introduction & Objective*
+The creation of Netflix heralded a new era for content streaming services. The massive of amounts of media available for consumption is staggering and customers are faced the problem of too many options. Services such as Netflix are becoming ever more data driven in order to provide their consumers with the best possible selection and service. Our recommender targets a specific television genre and provide Anime viewers with recommendations of programmes they may enjoy.
+
+*Dataset*
+Our dataset consists of information on user preference data from over 73K user and 12K of anime retrieved from https://www.kaggle.com/CooperUnion/anime-recommendations-database. The information consists of 2 separate but related datasets containing the following:
+Anime.csv
+- anime_id 
+- name - full name of anime.
+- genre - comma separated list of genres for this anime.
+- type - movie, TV, OVA, etc.
+- episodes - how many episodes in this show. (1 if movie).
+- rating - average rating out of 10 for this anime.
+- members - number of community members that are in this anime&#39;s &quot;group&quot;.
+Rating.csv
+- user_id - non identifiable randomly generated user id.
+- anime_id - the anime that this user has rated.
+- rating - rating out of 10 this user has assigned (-1 if the user watched it but didn&#39;t assign a rating)
+
+We focused our analysis on the 'Rating.csv' as it includes the data required to generate the recommendation. This dataset does not require much feature engineering beyond adjusting for the -1 ratings and creating a normalized real rating matrix. In Addition, due to the size of the dataset (over 7.8 million rows) we plan on taking a sample of 100,000 rows due to limitations on processing power.
+
+*Ethical ML Framework*
+Because the goal is simply to recommend anime to users, most aspects of the ethical ML framework do not apply. Data collection is transparent as it the data simply returns ratings of various anime by users. However, there may be a need to alert users that data collected will be taken for further use. Users are only identified by their user IDs and no personal information is available. The only potential way this data can be use maliciously is if the training data is compromised. However, the consequence of this event would only be users not receiving recommendations that match their taste in anime.
+
+*Assumptions*
+As Anime is now a worldwide phenomenon we can assume that the data collected originates from a wide variety of people. Additionally, we can most likely assume that the age group is fairly young.
+
+```{r, echo=TRUE, include=FALSE}
+library(recommenderlab)
+library(ggplot2)
+library(dplyr)
+library(reshape2)
+library(readr)
+library(psych)
+library(corrplot)
+library(corrgram)
+library(tidyr)
+library(lsa)
+library(kableExtra)
+```
+
+*Data Preparation and Cleansing*
+
+```{r, echo=TRUE, include=TRUE}
+ar <- read.csv("rating.csv")
+```
+
+Checking the number of rows
+
+```{r, echo=TRUE, include=TRUE}
+head(ar)
+nrow(ar)
+ncol(ar)
+```
+
+As mentioned in the above introduction, one of our first steps was to trim the data down to a more manageable size. As there are 7,813,737 rows of data, processing this data will take too long. We will cut this down and only take the first 100,000.
+
+Checking range
+```{r, echo=TRUE, include=TRUE}
+ar <- ar[1:100000,]
+nrow(ar)
+range(ar$rating, na.rm = FALSE)
+```
+
+Visualizing Ratings - as we can see the data is a bit skewed. Ratings seems to skew towards higher ratings.
+```{r, echo=TRUE, include=TRUE}
+
+boxplot(ar$rating)
+summary(ar$rating)
+```
+
+Checking for 'N/A' - we see no values are N/A
+```{r, echo=TRUE, include=TRUE}
+sum(is.na(ar))
+```
+
+Removing rows with -1 values as it means no rating was inputted by the user.
+
+```{r, echo=TRUE, include=TRUE}
+ar <- ar [!(ar$rating==-1),]
+nrow(ar)
+ncol(ar)
+# Check if values removed from rating
+-1 %in% ar$rating
+# rows removed
+```
+
+
+```{r, echo=TRUE, include=TRUE}
+
+# Count number of unique users in ar
+ar_uniq <- unique(ar)
+length(ar_uniq$user_id)
+```
+
+
+We need to remove our outliers. 
+```{r, echo=TRUE, include=TRUE}
+boxplot(ar$rating, ylab="Rating", col="red", title = "Ratings")
+```
+```{r, echo=TRUE, include=FALSE}
+outliers <- boxplot(ar$rating, plot=FALSE)$out
+```
+```{r, echo=TRUE, include=TRUE}
+ar[which(ar$rating %in% outliers),]
+nrow(ar)
+ncol(ar)
+ar<-ar[-which(ar$rating %in% outliers),]
+nrow(ar)
+ncol(ar)
+View(ar)
+```
+
+*Further Data Visualizations*
+
+```{r}
+ratingPlot <- ggplot(ar, aes(rating)) + geom_histogram(aes(y = ..density..), 
+    binwidth = 1, colour = "black", fill = "white")
+ratingPlot <- ratingPlot + geom_density(alpha = 0.2, fill = "#FF6666")
+print(ratingPlot)
+```
+```{r}
+ggplot(ar) + geom_density(aes(x = anime_id, color = rating))
+p <- ggplot(ar, aes(factor(rating), anime_id))
+p + geom_violin(fill = "grey80", colour = "#3366FF")
+```
+
+*Preparing Data for Model*
+Using acast to convert data.
+```{r, echo=TRUE, include=TRUE}
+g<-acast(ar, user_id ~ anime_id)
+class(g)
+```
+
+```{r, echo=TRUE, include=FALSE}
+R<-as.matrix(g)
+
+r <- as(R, "realRatingMatrix")
+r
+```
+
+```{r, echo=TRUE, include=TRUE}
+r_n <- normalize(r)
+
+```
+
+Converting data into a realRatingMatrix data structure and visualizing the ratings (Raw vs Normal)
+```{r, echo=TRUE, include=TRUE}
+image(r, main = "Raw Ratings")
+image(r_n, main = "Normalized Ratings")
+summary(getRatings(r))
+summary(getRatings(r_n))
+```
+
+*Train a User-Based Collaborative Filtering Recommender*
+We will be conducting a 80/20 test/train with up to 15 items recommended, specifying that any rating greater than 5 is a good rating. Due to the large number of observations, we will be using given = -1 to get an 'all-but-1' evaluation.
+
+Below is 80/20 training/testing split, up to 15 items recommended, specifying any rating greater than 5 is a good rating
+k value = number of folds/times to run evaluation (defaults to 10 for cross-validation and bootstrap and 1 for split)
+due to large number of observations, using given = -1 means all-but-1 evaluation
+```{r, echo=TRUE, include=TRUE}
+# Test/Train Split
+
+
+e <- evaluationScheme (r, method="split", train = 0.8, given = -1, goodRating = 5) # using r because e will be normalized by Z-score in recommender
+e
+
+```
+
+Running the algorithm
+```{r, echo=TRUE, include=TRUE}
+#For the recommender
+# Train UBCF cosine similarity model (Z-score normalization)
+
+rec=Recommender(getData(e,"train"),method="UBCF", param=list(normalize = "Z-score",method="Cosine",nn=5))
+```
+
+Examining the results
+```{r, echo=TRUE, include=TRUE}
+print(rec)
+names(getModel(rec))
+getModel(rec)$nn
+```
+
+Compute predicted ratings
+```{r, echo=TRUE, include=TRUE}
+# Compute predicted ratings
+nrow(ar)
+ncol(ar)
+recom <- predict(rec, getData(e,"known"), type="ratings")
+recom
+```
+
+Set all predictions that fall outside valid range to boundary values
+```{r, echo=TRUE, include=TRUE}
+recom@data@x[recom@data@x[] < -10] <- -10
+recom@data@x[recom@data@x[] > 10] <- 10
+
+```
+
+Calculate the error between predictions and unkown portions of test data
+```{r, echo=TRUE, include=TRUE}
+er <- rbind(rec = calcPredictionAccuracy(recom,getData(e,"unknown")))
+kable(er) # returns root mean square error, mean squared error, and mean absolute error
+```
+
+
+```{r}
+rec_pearson=Recommender(getData(e,"train"),method="UBCF", param=list(normalize = "Z-score",method="pearson",nn=5))
+recom_pearson <- predict(rec_pearson, getData(e,"known"), type="ratings")
+recom_pearson@data@x[recom_pearson@data@x[] < -1] <- -1
+recom_pearson@data@x[recom_pearson@data@x[] > 10] <- 10
+# Calculate the error between predictions and unkown portions of test data
+er_pearson <- rbind(recom_pearson = calcPredictionAccuracy(recom_pearson,getData(e,"unknown")))
+kable(er_pearson) # returns root mean square error, mean squared error, and mean absolute error
+```
+
+
+```{r}
+rec_popular=Recommender(getData(e,"train"),method="POPULAR")
+recom_popular <- predict(rec_popular, getData(e,"known"), type="ratings")
+recom_popular@data@x[recom_popular@data@x[] < -1] <- -1
+recom_popular@data@x[recom_popular@data@x[] > 10] <- 10
+# Calculate the error between predictions and unkown portions of test data
+er_popular <- rbind(recom_popular = calcPredictionAccuracy(recom_popular,getData(e,"unknown")))
+kable(er_popular) # returns root mean square error, mean squared error, and mean absolute error
+```
+
+
+```{r}
+rec_Jaccard=Recommender(getData(e,"train"),method="UBCF", param=list(normalize = "Z-score",method="Jaccard",nn=5))
+recom_Jaccard <- predict(rec_Jaccard, getData(e,"known"), type="ratings")
+recom_Jaccard@data@x[recom_Jaccard@data@x[] < -1] <- -1
+recom_Jaccard@data@x[recom_Jaccard@data@x[] > 10] <- 10
+# Calculate the error between predictions and unkown portions of test data
+er_Jaccard <- rbind(recom_Jaccard = calcPredictionAccuracy(recom_Jaccard,getData(e,"unknown")))
+kable(er_Jaccard) # returns root mean square error, mean squared error, and mean absolute error
+```
+
+*Visualizing the z-score model's predicted values*
+```{r, echo=TRUE, include=TRUE}
+#Visualize z-score model's predicted values (Should be normal... not sure why they are skewed):
+boxplot(as.vector(as(recom, "matrix")), col = "yellow", main = "Distribution of Predicted Values for Model", ylab = "Ratings")
+hist(as.vector(as(recom, "matrix")), main = "Distrib. of Predicted Values for Model", col = "yellow", xlab = "Predicted Ratings")
+```
+
+*Files for Shiny App*
+```{r, echo=TRUE, include=TRUE}
+View(ar)
+saveRDS(rec, file = "AnimeRecommender.Rds")
+saveRDS(ar, file = "Anime.Rds")
+```
+
+*Shiny App Deployment*
+This model has been deployed in Shiny App. It can be found in the following link.
+https://groupf.shinyapps.io/assignment_1_-_new/
+
+*Acknowledgement*
+https://github.com/danmalter/Movielense
+
